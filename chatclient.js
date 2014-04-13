@@ -1,57 +1,55 @@
 var CryptoJS = require("crypto-js");
+var DF = require("./lib/diffieHellman");
+var ss = require('socket.io-stream');
+var fs = require('fs');
 
-var publicPrime = 15486173;
-var publicBase = 5;
-  
-function discrete_exp(t,u,n) {   
-// args are base, exponent, modulus
-// computes s = (t ^ u) mod n
-// (see Bruce Schneier's book, _Applied Cryptography_ p. 244)
-  var s = 1;
-  while (u) { 
-    if (u&1) {
-      s = (s*t) % n
-    }; 
-    u >>= 1; 
-    t = (t*t)%n; 
-  };
-  return s;
-}
-
+// Contact List Hack
 var ChatClient = function (options) {
-  this.keys = {};
+
+  this.contacts = options.contacts;  
   this.baseURL = options.baseURL || "http://localhost:3000";
-  this.privateKey = Math.floor((Math.random()*1000000)+1);
-  this.publicKey = discrete_exp(5, this.privateKey, 15486173);  
   this.name = options.name;
+
   this.messageReceived = options.messageReceived;
+  this.uploadReceived = options.uploadReceived;
   return this;
 }
 
 ChatClient.prototype.connect = function(cb){
+
+  // Socket
   this.socket = require('socket.io-client').connect(this.baseURL + '?name=' + this.name, {
       transports: ['websocket'],
       'force new connection': true
   });
 
   this.socket.on('event_message', this.messageReceived);
-  this.socket.on('action_handshake', this.handleShakeHand.bind(this));
+  var that = this;
+
+  // Handle upload event
+  ss(this.socket).on('event_upload', function(stream, data) {    
+
+    var filename = __dirname + "/downloads/" + data.filename;
+    stream.pipe(fs.createWriteStream(filename));    
+    stream.on('end', function(){
+      that.uploadReceived(filename);
+    }.bind(data));
+  });
+
   this.socket.on('connect', cb);  
+
+  // Stream
+  this.stream = ss.createStream();
+
+  this.contacts.forEach(function(contact){
+    contact.df = new DF(that.socket, contact.name);
+  })
 }
 
-ChatClient.prototype.shakeHand = function(withUser){
-  this.socket.emit("action_handshake", {to: withUser, publicKey : this.publicKey});
-}
-
-ChatClient.prototype.handleShakeHand = function(payload){
-
-  if(!this.keys[payload.from]){
-
-    var ourKey = discrete_exp(payload.publicKey, this.privateKey, 15486173).toString();
-    this.keys[payload.from] = ourKey;
-
-    this.shakeHand(payload.from);
-  }
+ChatClient.prototype.setupSecureConversation = function(withUser, callback){
+  this.contacts.filter(function(contact){
+    return contact.name === withUser;
+  })[0].df.getKey(callback);
 }
 
 ChatClient.prototype.sendSecureMessage = function(payload) {
@@ -59,13 +57,26 @@ ChatClient.prototype.sendSecureMessage = function(payload) {
   this.socket.emit('action_send_message', payload);
 };
 
+ChatClient.prototype.sendFile = function(payload) {
+  ss(this.socket).emit('action_upload', this.stream, payload);
+  fs.createReadStream(__dirname + "/fixtures/" + payload.filename).pipe(this.stream);
+};
+
+
 ChatClient.prototype.encrypt = function(paramStr, forUser){
-  return CryptoJS.AES.encrypt(paramStr, this.keys[forUser]).toString();
+  var key = this.contacts.filter(function(contact){
+    return contact.name === forUser;
+  })[0].df.getFinalKey();
+  
+  return CryptoJS.AES.encrypt(paramStr, key).toString();
 };
 
 ChatClient.prototype.decrypt = function(paramStr, forUser){
-  return CryptoJS.AES.decrypt(paramStr, this.keys[forUser]).toString(CryptoJS.enc.Utf8);
-};
+  var key = this.contacts.filter(function(contact){
+    return contact.name === forUser;
+  })[0].df.getFinalKey();
 
+  return CryptoJS.AES.decrypt(paramStr, key).toString(CryptoJS.enc.Utf8);
+};
 
 module.exports = ChatClient;
