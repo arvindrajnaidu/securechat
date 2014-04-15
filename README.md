@@ -8,26 +8,17 @@ Installation
 ------------
 
 npm install
-npm test
 
-If you dont have bower
-npm install bower -g
+cd public
+bower install
 
-Go to public directory and bower install
-
-Build
+Start Server
 -----
 
-Build test to run on browser
-browserify test/chat.js -o public/test/chat.js
-
-Start
------
 npm start
 
-For browser based tests, go to http://localhost:3000/test/chat.html
+Test
+----
 
-
-
-
+npm test
 
